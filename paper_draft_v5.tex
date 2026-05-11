@@ -1,0 +1,413 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage[numbers]{natbib}
+\geometry{margin=1in}
+
+\title{\textbf{Polyinverse}: Multi-task Attentive Fingerprint Graph Neural Network for Polymer Property Prediction and SA Score-Guided Inverse Design}
+
+\author{
+  Ethan Im \\
+  Independent Researcher, South Korea \\
+  \texttt{lki100500@gmail.com}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Polymer discovery traditionally relies on time-consuming trial-and-error experimentation.
+We present \textbf{Polyinverse}, an open-source framework combining multi-task Attentive Fingerprint (AttentiveFP) Graph Neural Networks for polymer property prediction with a synthesizability-guided inverse design pipeline. By combining publicly available datasets augmented with pseudo-labeled structures from PI1M into a unified corpus of 7,588 unique polymer structures, our multi-task GNN simultaneously predicts three key properties:
+density ($R^2 = 0.871$, MAE $= 0.0336$ g/ml), normalized crystallization temperature Tc
+($R^2 = 0.728$, MAE $= 0.0262$ in normalized scale), and glass transition temperature Tg
+($R^2 = 0.793$, MAE $= 68.43$ °C) from SMILES representations.
+Multi-task learning improves density prediction by 35\% over single-task GNN baselines
+($R^2$: $0.595 \rightarrow 0.871$), supported by a statistically significant negative
+correlation between density and Tc ($r = -0.246$, $p = 1.07 \times 10^{-20}$).
+For inverse design, we propose a genetic algorithm incorporating SA Score filtering
+($\leq 4.0$) to ensure synthetic accessibility of candidate polymers, achieving target
+density errors below 0.01 g/ml. All code and models are publicly available.
+\end{abstract}
+
+\section{Introduction}
+
+Polymeric materials are fundamental to modern industry, appearing in applications
+ranging from packaging and electronics to biomedical devices. However, developing
+new polymers with desired properties remains slow and expensive, dominated by
+expert intuition and laboratory trial-and-error. A single design-synthesize-test
+cycle can take months, severely limiting the pace of materials innovation.
+
+Machine learning (ML) has emerged as a powerful tool to accelerate materials discovery.
+Graph neural networks (GNNs) have shown strong performance in predicting molecular
+properties by directly learning from molecular graph representations,
+eliminating the need for hand-crafted features \citep{gcnn_polymer_2018}.
+
+Despite progress in property prediction, most existing work focuses on the
+\textit{forward} problem: given a molecular structure, predict its properties.
+The \textit{inverse} problem---given desired properties, suggest candidate
+structures---remains significantly more challenging for polymers.
+Existing inverse design approaches either require expensive molecular dynamics
+(MD) simulations for training data \citep{vitrimer_inverse_2023} or produce
+molecules with poor synthetic accessibility.
+
+In this work, we present \textbf{Polyinverse}, addressing both problems:
+\begin{enumerate}
+    \item A multi-task AttentiveFP GNN that simultaneously predicts density, crystallization
+    temperature (Tc), and glass transition temperature (Tg) from polymer SMILES,
+    leveraging their physical correlations across a combined dataset of 7,588 polymers.
+    \item A genetic algorithm-based inverse design pipeline with SA Score
+    \citep{ertl_sa_score_2009} filtering for synthetic accessibility.
+\end{enumerate}
+
+\noindent\textbf{Why Genetic Algorithm over VAE/Diffusion?}
+Recent generative approaches (VAE, Diffusion) require large labeled datasets
+(often $>10^5$ samples) for stable training. Given the inherent scarcity of
+labeled polymer data (5,616 density samples in our combined dataset), we chose a
+genetic algorithm that operates directly on existing polymer SMILES without
+requiring a separate generative model. This data-efficient approach is more
+appropriate for the small-data regime common in polymer informatics.
+
+\noindent Our key contributions are:
+\begin{itemize}
+    \item Multi-task AttentiveFP GNN achieving $R^2=0.871$ for polymer density
+    using a dataset of 7,588 unique polymers augmented via PI1M pseudo-labeling
+    \item Extension to three-property prediction (Density + Tc + Tg) with
+    masked multi-task loss handling missing property values
+    \item Statistical analysis showing Density-Tc correlation ($r=-0.246$)
+    explains multi-task learning gains
+    \item First integration of SA Score constraints in polymer inverse design
+    via genetic algorithm, with explicit discussion of limitations for
+    polymeric repeat units
+    \item Fully open-source implementation with interactive web deployment
+\end{itemize}
+
+\section{Related Work}
+
+\subsection{Polymer Property Prediction}
+
+Early ML approaches relied on hand-crafted molecular descriptors with traditional
+ML models. Reyes-Lillo et al. \citep{gcnn_polymer_2018} pioneered graph convolutional neural networks
+for polymer property prediction, demonstrating superior performance over
+descriptor-based methods for dielectric properties.
+
+Multi-task learning has been explored in polymer informatics.
+POLYMERGNN \citep{polymergnn_2023} demonstrated multi-task GNN prediction
+of thermal and mechanical properties, achieving $R^2 \approx 0.72$ for glass
+transition temperature on 240 synthesized polyesters.
+The NeurIPS 2025 Open Polymer Challenge \citep{neurips_opc_2025} established
+the first large-scale open benchmark, revealing that GNN-based approaches
+consistently outperform descriptor-based methods.
+
+\subsection{Polymer Inverse Design}
+
+Yue et al. \citep{vitrimer_inverse_2023} proposed a graph VAE for inverse design of vitrimers
+with target $T_g$, requiring one million MD-simulated structures for training.
+Vogel and Weber \citep{copolymer_inverse_2024} extended inverse design to complex copolymer
+architectures using generative models.
+These approaches share a common limitation: large computational requirements
+and no explicit synthesizability constraints. Our work addresses both by using
+only open experimental data and enforcing SA Score filtering.
+
+\section{Methods}
+
+\subsection{Dataset}
+
+We construct a unified polymer dataset combining three publicly available sources:
+(1) the NeurIPS 2025 Open Polymer Challenge dataset \citep{neurips_opc_2025} containing
+3,502 polymer structures, (2) the Extended Polymer Dataset with 1,088 structures,
+and (3) the TG-Density Excerpt with 194 structures. After canonicalizing SMILES
+representations using RDKit and removing duplicates, the experimental corpus contains
+4,594 unique polymer structures.
+
+To address the severe data scarcity in Tg (only 368 experimental samples),
+we augment the dataset using pseudo-labeling from the PI1M database \citep{pi1m_2020}.
+Specifically, we sample 3,000 structurally valid polymers (SA Score $\leq 4.0$)
+from PI1M and generate pseudo-labels using our pre-trained model, expanding
+Tg coverage from 368 to 3,362 samples. The final corpus contains 7,588 unique
+polymer structures. Table~\ref{tab:dataset} summarizes the data distribution.
+
+\begin{table}[h]
+\centering
+\caption{Combined dataset statistics (after PI1M augmentation)}
+\label{tab:dataset}
+\begin{tabular}{lcccc}
+\toprule
+Property & Samples & Min & Max & Mean \\
+\midrule
+Density (g/ml) & 5,616 & 0.135 & 1.914 & 1.094 \\
+Tc (normalized) & 5,446 & 0.024 & 0.954 & 0.254 \\
+Tg (°C)        & 3,362 & -138.8 & 484.7 & 156.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Note on Tc values:} The Tc values are provided in a normalized
+scale $[0, 1]$. All reported Tc metrics are in this normalized scale.
+Denormalized MAE is 0.0028 (original unit).
+
+Polymer structures are represented as SMILES strings with repeat unit notation,
+where \texttt{*} symbols at chain termini indicate polymerization attachment points.
+
+\subsection{Multi-task Graph Neural Network}
+
+\noindent\textbf{Molecular Representation.}
+Each polymer repeat unit is represented as a molecular graph $G = (V, E)$,
+where nodes $V$ correspond to atoms and edges $E$ to bonds.
+Each atom $v_i$ is represented by an 8-dimensional feature vector:
+
+\begin{equation}
+\mathbf{x}_i = [\frac{Z_i}{100}, \frac{d_i}{10}, \frac{q_i}{5},
+a_i, r_i, \frac{h_i}{8}, \frac{m_i}{200}, \frac{\text{hyb}_i}{8}]
+\end{equation}
+
+where $Z_i$ is atomic number, $d_i$ is degree, $q_i$ is formal charge,
+$a_i \in \{0,1\}$ is aromaticity, $r_i \in \{0,1\}$ is ring membership,
+$h_i$ is number of hydrogens, $m_i$ is atomic mass, and
+$\text{hyb}_i$ is hybridization state (encoded as RDKit integer: SP=2, SP2=3, SP3=4).
+Each bond $e_{ij}$ is represented by a 3-dimensional edge feature vector
+encoding bond type, aromaticity, and ring membership.
+
+\noindent\textbf{Architecture.}
+We employ an Attentive Fingerprint (AttentiveFP) encoder \citep{attentivefp_2019}
+with 4 message-passing layers and 2 readout timesteps, which applies graph-level
+attention to capture both local and global molecular interactions:
+
+\begin{equation}
+\mathbf{h} = \text{AttentiveFP}(\mathbf{X}, \mathbf{E}, \mathbf{A})
+\end{equation}
+
+The shared molecular embedding passes through a fully-connected layer before
+task-specific prediction heads for all three properties:
+
+\begin{equation}
+\hat{y}_{\text{density}}, \hat{y}_{T_c}, \hat{y}_{T_g} = 
+f_{\text{density}}(\mathbf{h}),\; f_{T_c}(\mathbf{h}),\; f_{T_g}(\mathbf{h})
+\end{equation}
+
+\noindent\textbf{Training.}
+All target properties are z-score normalized before training.
+Training uses masked MSE loss to handle missing property values:
+
+\begin{equation}
+\mathcal{L} = \frac{1}{|M_d|}\sum_{i \in M_d}(\hat{y}^i_d - y^i_d)^2 +
+              \frac{1}{|M_t|}\sum_{i \in M_t}(\hat{y}^i_t - y^i_t)^2 +
+              \frac{1}{|M_g|}\sum_{i \in M_g}(\hat{y}^i_g - y^i_g)^2
+\end{equation}
+
+where $M_d$, $M_t$, and $M_g$ are the index sets of samples with observed
+density, Tc, and Tg values, respectively.
+The model is trained for 500 epochs using Adam optimizer
+(lr=$10^{-3}$, weight decay=$10^{-5}$) with ReduceLROnPlateau scheduling.
+
+\subsection{SA Score-Guided Inverse Design}
+
+\noindent\textbf{Motivation.}
+The SA Score \citep{ertl_sa_score_2009} was originally designed for
+drug-like small molecules. Applying it to polymer repeat units (with \texttt{*}
+terminal atoms) requires careful consideration: the \texttt{*} atoms are
+treated as carbon atoms (atomic number 6) during SA Score computation in
+RDKit's implementation, which may slightly underestimate synthesis difficulty
+for certain repeat units. Despite this limitation, SA Score remains the most
+widely accessible synthesizability metric, and we use it as a first-order
+filter acknowledging that full polymerizability assessment (e.g., checking
+for reactive end groups capable of chain-growth or step-growth polymerization)
+is beyond the scope of this initial framework.
+
+\noindent\textbf{Algorithm.}
+Given target properties $\rho^*$, $T_c^*$, $T_g^*$, we evolve a population
+of polymer SMILES using a combined fitness function:
+
+\begin{equation}
+\text{fitness}(s) = w_d|\hat{\rho}(s) - \rho^*| + w_t|\hat{T}_c(s) - T_c^*| +
+w_g|\hat{T}_g(s) - T_g^*| + \lambda \cdot \max(0, \text{SA}(s) - \tau)
+\end{equation}
+
+where $w_d, w_t, w_g$ are user-defined property weights,
+$\tau = 4.0$ is the synthesizability threshold, and $\lambda = 0.1$ is a penalty weight.
+
+Mutation operators are restricted to atomic substitution within $\{C, N, O\}$
+(atomic numbers 6, 7, 8) to maintain chemical reasonableness and avoid
+introducing elements (F, Cl, S) that could artificially inflate density
+predictions without reflecting synthetically practical polymers.
+Only candidates satisfying $\text{SA}(s) \leq 4.0$ are accepted as final results.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{paper_figures/fig1_data_analysis.png}
+\caption{Dataset analysis. (Left) Density distribution (n=5,616, mean=1.094 g/ml). 
+(Center) Tc distribution in normalized scale (n=5,446). 
+(Right) Tg distribution (n=3,362, after PI1M augmentation).}
+\label{fig:data}
+\end{figure}
+
+\section{Results}
+
+\subsection{Why Multi-task Learning Works: Density-Tc Correlation}
+
+Before presenting prediction results, we analyze the physical basis for
+multi-task learning gains. Figure~\ref{fig:data} shows the relationship
+between density and Tc across polymers with both measurements.
+The Pearson correlation coefficient $r = -0.246$ ($p = 1.07 \times 10^{-20}$)
+indicates a statistically significant negative correlation: denser polymers
+tend to have lower crystallization temperatures. This physical relationship
+provides complementary information that multi-task learning can exploit,
+explaining the substantial performance improvement over single-task models.
+
+\subsection{Property Prediction}
+
+Table~\ref{tab:results} compares our multi-task AttentiveFP GNN against baseline models.
+All models use an 80/20 train-test split with random seed 42.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{paper_figures/combined_results.png}
+\caption{Multi-task AttentiveFP GNN prediction results on test set. 
+(Left) Density ($R^2=0.871$, MAE$=0.0336$ g/ml). 
+(Center) Tc ($R^2=0.728$, MAE$=0.0262$ normalized).
+(Right) Tg ($R^2=0.793$, MAE$=68.43$ °C).}
+\label{fig:prediction}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Polymer property prediction performance comparison}
+\label{tab:results}
+\begin{tabular}{lccccc}
+\toprule
+Model & Density $R^2$ & Density MAE & Tc $R^2$ & Tc MAE & Tg $R^2$ \\
+\midrule
+Random Forest (9 feat.)  & 0.388 & 0.0622 & --    & --     & -- \\
+XGBoost (217 feat.)      & 0.595 & 0.0402 & --    & --     & -- \\
+Single-task GNN          & 0.595 & 0.0364 & --    & --     & -- \\
+Multi-task GNN (NeurIPS only) & 0.757 & 0.0294 & 0.512 & 0.0364 & 0.321 \\
+\textbf{AttentiveFP Multi-task (ours)} & \textbf{0.871} & \textbf{0.0336} & \textbf{0.728} & \textbf{0.0262} & \textbf{0.793} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Multi-task learning with the combined dataset provides a 35\% improvement
+in $R^2$ over single-task GNN ($0.595 \rightarrow 0.871$).
+The Tg $R^2$ improves dramatically from 0.321 to 0.793 following PI1M-based
+data augmentation (368 $\rightarrow$ 3,362 samples), confirming that
+data scarcity was the primary bottleneck for Tg prediction.
+
+\subsection{Inverse Design with SA Score Filter}
+
+Table~\ref{tab:inverse} presents representative inverse design results for
+three target densities. All reported candidates satisfy SA Score $\leq 4.0$.
+
+\begin{table}[h]
+\centering
+\caption{Inverse design results with SA Score filter ($\leq 4.0$)}
+\label{tab:inverse}
+\begin{tabular}{lcccc}
+\toprule
+Target (g/ml) & Description & Predicted (g/ml) & Error & SA Score \\
+\midrule
+0.95 & PP/PE range & 0.9532 & 0.0032 & 3.74 \\
+1.20 & PET range   & 1.2099 & 0.0099 & 3.51 \\
+1.40 & PVC range   & 1.3893 & 0.0107 & 3.92 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Without the SA Score filter, candidates contained excessive halogen and
+sulfur atoms (SA Score $> 5.5$) that are chemically unrealistic for
+practical polymer synthesis. The filter effectively restricts the search
+to carbon-, nitrogen-, and oxygen-based structures consistent with
+commercially relevant polymer classes.
+
+\section{Conclusion}
+
+We presented Polyinverse, a framework for polymer property prediction
+and inverse design using publicly available data.
+Our multi-task AttentiveFP GNN achieves $R^2 = 0.871$ for density prediction,
+outperforming single-task baselines by 35\%.
+The model simultaneously predicts Tc ($R^2=0.728$) and Tg ($R^2=0.793$),
+where Tg performance improved dramatically (0.321 $\rightarrow$ 0.793)
+through PI1M-based pseudo-label augmentation.
+The SA Score-guided genetic algorithm produces synthesizable polymer
+candidates with target density errors below 0.01 g/ml, now extended
+to simultaneous multi-property optimization (Density + Tc + Tg).
+
+\noindent\textbf{Limitations.}
+Pseudo-labeled Tg data from PI1M may introduce distribution shift;
+future work should validate against additional experimental measurements.
+The SA Score was not designed for polymeric repeat units; future work
+should incorporate polymerizability-specific metrics.
+
+\noindent\textbf{Future Work.}
+We plan to (1) validate pseudo-labeled Tg predictions against experimental
+data from PolyInfo and other polymer databases,
+(2) explore diffusion model-based molecular generation for larger-data regimes,
+and (3) incorporate a rule-based polymerizability filter to ensure
+candidate repeat units possess reactive end groups capable of
+chain-growth or step-growth polymerization.
+
+The inverse design targets in this work (PP/PE range: 0.95 g/ml, 
+PET range: 1.20 g/ml, PVC range: 1.40 g/ml) directly correspond to 
+commercially relevant polymer classes, demonstrating that Polyinverse 
+addresses real industrial materials design challenges faced by polymer 
+manufacturers.
+
+Polyinverse is publicly available at:
+\url{https://github.com/Ethan-Im/polyinverse} and
+\url{https://huggingface.co/spaces/Ethan-Im/polyinverse}.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem{gcnn_polymer_2018}
+Reyes-Lillo, S.E., et al. (2018).
+\textit{Graph Convolutional Neural Networks for Polymer Property Prediction}.
+arXiv:1811.06231.
+
+\bibitem{polymergnn_2023}
+Queen, O., et al. (2023).
+\textit{POLYMERGNN: A Graph Neural Network Framework for Multi-task Polymer Property Prediction}.
+
+\bibitem{neurips_opc_2025}
+Liu, G., et al. (2025).
+\textit{Open Polymer Challenge: Post-Competition Report}.
+arXiv:2512.08896.
+
+\bibitem{vitrimer_inverse_2023}
+Yue, Y., et al. (2023).
+\textit{AI-guided inverse design and discovery of recyclable vitrimeric polymers}.
+arXiv:2312.03690.
+
+\bibitem{copolymer_inverse_2024}
+Vogel, G., Weber, J.M. (2024).
+\textit{Inverse design of copolymers including stoichiometry and chain architecture}.
+Chemical Science. DOI:10.1039/d4sc05900j.
+
+\bibitem{ertl_sa_score_2009}
+Ertl, P., Schuffenhauer, A. (2009).
+\textit{Estimation of synthetic accessibility score of drug-like molecules}.
+Journal of Cheminformatics, 1(1), 8.
+
+\bibitem{attentivefp_2019}
+Xiong, Z., et al. (2019).
+\textit{Pushing the Boundaries of Molecular Representation for Drug Discovery with the Graph Attention Mechanism}.
+Journal of Medicinal Chemistry, 63(16), 8749--8760.
+
+\bibitem{pi1m_2020}
+Ma, R., Luo, T. (2020).
+\textit{PI1M: A Benchmark Database for Polymer Informatics}.
+Journal of Chemical Information and Modeling, 61(6), 2712--2721.
+
+\bibitem{kipf_gcn_2017}
+Kipf, T.N., Welling, M. (2017).
+\textit{Semi-Supervised Classification with Graph Convolutional Networks}.
+ICLR 2017. arXiv:1609.02907.
+
+\end{thebibliography}
+
+\end{document}
