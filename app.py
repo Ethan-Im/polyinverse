@@ -155,13 +155,15 @@ model.load_state_dict(torch.load(model_path, map_location='cpu'))
 model.eval()
 
 # Load VAE model
-vae_vocab = torch.load('vae_vocab.pt')
+vae_vocab_path = hf_hub_download(repo_id='Ethan-Im/polyinverse-model', filename='vae_vocab.pt', repo_type='model')
+vae_vocab = torch.load(vae_vocab_path)
 vae_token2idx = vae_vocab['token2idx']
 vae_idx2token = vae_vocab['idx2token']
 vae_vocab_size = vae_vocab['vocab_size']
 
 vae_model = PolymerVAE(vocab_size=vae_vocab_size)
-vae_model.load_state_dict(torch.load('best_vae.pt', map_location='cpu'))
+vae_model_path = hf_hub_download(repo_id='Ethan-Im/polyinverse-model', filename='best_vae.pt', repo_type='model')
+vae_model.load_state_dict(torch.load(vae_model_path, map_location='cpu'))
 vae_model.eval()
 
 # Explainer
